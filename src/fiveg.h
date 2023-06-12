@@ -3,6 +3,4 @@
 #ifndef __FIVEG_H
 #define __FIVEG_H
 
-
-
 #endif /* __FIVEG_H */

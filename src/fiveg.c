@@ -22,7 +22,7 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 
 int main(int argc, char **argv)
 {
-	if(argc > 2) {
+	if (argc > 2) {
 		fprintf(stderr, "Too many arguments supplied.\n");
 		return 1;
 	} else if (argc == 1) {
@@ -39,7 +39,7 @@ int main(int argc, char **argv)
 	struct fiveg_bpf *skel;
 
 	ifindex = if_nametoindex(argv[1]);
-	if(ifindex == 0) {
+	if (ifindex == 0) {
 		fprintf(stderr, "No interface found with given name.\n");
 		return 1;
 	}
@@ -47,37 +47,30 @@ int main(int argc, char **argv)
 	// LIBBPF_OPTS fills the struct with zeros
 	// set the .sz field accordingly with the size of the struct
 	// and set all the other fields with the provided values
-	LIBBPF_OPTS(
-		bpf_tc_hook, tc_ingress_hook,
-			.ifindex = ifindex,
-			.attach_point = BPF_TC_INGRESS,
-	);
+	LIBBPF_OPTS(bpf_tc_hook, tc_ingress_hook, .ifindex = ifindex,
+		    .attach_point = BPF_TC_INGRESS, );
 
 	skel = fiveg_bpf__open_and_load();
-	if(!skel) {
+	if (!skel) {
 		fprintf(stderr, "Failed to open BPF skeleton\n");
 		return 1;
 	}
 
 	err = bpf_tc_hook_create(&tc_ingress_hook);
-	if(!err)
+	if (!err)
 		hook_created = true;
 	if (err && err != -EEXIST) {
 		fprintf(stderr, "Failed to create TC hook: %d\n", err);
 		goto cleanup;
 	}
 
-
 	// struct bpf_tc_opts tc_ingress_opts;
-	LIBBPF_OPTS(
-		bpf_tc_opts, tc_ingress_opts, 
-			.prog_fd = bpf_program__fd(skel->progs.tc_ingress),
-			.handle = 1,
-			.priority = 1,
-	);
+	LIBBPF_OPTS(bpf_tc_opts, tc_ingress_opts,
+		    .prog_fd = bpf_program__fd(skel->progs.tc_ingress), .handle = 1,
+		    .priority = 1, );
 
 	err = bpf_tc_attach(&tc_ingress_hook, &tc_ingress_opts);
-	if(err) {
+	if (err) {
 		fprintf(stderr, "Failed to attach TC: %d\n", err);
 		goto cleanup;
 	}
@@ -89,7 +82,7 @@ int main(int argc, char **argv)
 	}
 
 	printf("Started!");
-	
+
 	while (!exiting) {
 		fprintf(stderr, ".");
 		sleep(1);
@@ -103,14 +96,13 @@ int main(int argc, char **argv)
 	tc_ingress_opts.prog_id = 0;
 
 	err = bpf_tc_detach(&tc_ingress_hook, &tc_ingress_opts);
-	if (err){
+	if (err) {
 		fprintf(stderr, "Failed to detach TC: %d\n", err);
 		goto cleanup;
 	}
 
-
 cleanup:
-	if( hook_created)
+	if (hook_created)
 		bpf_tc_hook_destroy(&tc_ingress_hook);
 	fiveg_bpf__destroy(skel);
 	return -err;
