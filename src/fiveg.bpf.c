@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
-/* Copyright (c) 2022 Hengqi Chen */
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
@@ -8,6 +7,21 @@
 // copied from linux/if_ether.h
 #define ETH_P_IP   0x0800
 #define ETH_P_IPV6 0x86DD
+
+#define MAX_CHUNKS 128
+
+// Create a pointer to a struct, points it to the current cursor position
+// and then advances the cursor by the size of the struct.
+#define ADVANCE_CURSOR(TYPE, NAME, CURSOR, END) \
+	if (CURSOR + sizeof(TYPE) > END)        \
+		return 0;                       \
+	TYPE *NAME = CURSOR;                    \
+	CURSOR += sizeof(TYPE)
+
+#define MOUNT(TYPE, NAME, CURSOR, END)   \
+	if (CURSOR + sizeof(TYPE) > END) \
+		return 0;                \
+	TYPE *NAME = CURSOR;
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -18,65 +32,52 @@ int tc_ingress(struct __sk_buff *skb)
 	void *data_end = (void *)(long)skb->data_end;
 	void *cursor = data;
 
-	// check ethernet frame header and advance the cursor
-	if (cursor + sizeof(struct ethhdr) > data_end)
-		return 0;
-	struct ethhdr *ethh = cursor;
-	cursor += sizeof(struct ethhdr);
+	// FIXME: here we assume it is an ethernet frame inside the socket buffer
+	ADVANCE_CURSOR(struct ethhdr, ethh, cursor, data_end);
 
-	if (bpf_ntohs(ethh->h_proto) == ETH_P_IP) {
-		// check ip packet header and advance the cursor
-		if (cursor + sizeof(struct iphdr) > data_end)
-			return 0;
-		struct iphdr *iph = cursor;
-		cursor += sizeof(struct iphdr);
+	__u8 ip_proto;
 
-		if (iph->protocol != IPPROTO_SCTP)
-			return 0;
+	switch (bpf_ntohs(ethh->h_proto)) {
+	case ETH_P_IP:
+		ADVANCE_CURSOR(struct iphdr, iph, cursor, data_end);
+		ip_proto = iph->protocol;
+		break;
 
-	} else if (bpf_ntohs(ethh->h_proto) == ETH_P_IPV6) {
-		// check ipv6 packet header and advance the cursor
-		if (cursor + sizeof(struct ipv6hdr) > data_end)
-			return 0;
-		struct ipv6hdr *ipv6h = cursor;
-		cursor += sizeof(struct ipv6hdr);
+	case ETH_P_IPV6:
+		ADVANCE_CURSOR(struct ipv6hdr, ipv6h, cursor, data_end);
+		ip_proto = ipv6h->nexthdr;
+		break;
 
-		if (ipv6h->nexthdr != IPPROTO_SCTP)
-			return 0;
-	} else {
+	default:
 		return 0;
 	}
 
-	// check sctp segment header and advance the cursor
-	if (cursor + sizeof(struct sctphdr) > data_end)
+	if (ip_proto != IPPROTO_SCTP)
 		return 0;
 
-	struct sctphdr *sctph = cursor;
-	cursor += sizeof(struct sctphdr);
+	ADVANCE_CURSOR(struct sctphdr, sctph, cursor, data_end);
 
-	// check chunk of sctp
-	if (cursor + sizeof(struct sctp_chunkhdr) > data_end)
-		return 0;
+	for (int i = 0; i < MAX_CHUNKS; i++) {
+		MOUNT(struct sctp_chunkhdr, chunkh, cursor, data_end);
+		__u16 chunk_len = bpf_ntohs(chunkh->length);
 
-	struct sctp_chunkhdr *chunkh = cursor;
-	cursor += sizeof(struct sctp_chunkhdr);
+		if (chunkh->type == SCTP_CID_DATA) {
+			MOUNT(struct sctp_datahdr, datah, cursor + sizeof(struct sctp_chunkhdr),
+			      data_end);
+			__u16 payload_len = chunk_len - (sizeof(struct sctp_chunkhdr) +
+							 sizeof(struct sctp_datahdr));
 
-	// we are only interested in data segments
-	if (chunkh->type != SCTP_CID_DATA)
-		return 0;
+			bpf_printk("Received SCTP data packet!");
+			// TODO: here, use the sctp payload
+		}
 
-	if (cursor + sizeof(struct sctp_datahdr) > data_end)
-		return 0;
-	struct sctp_datahdr *datah = cursor;
-	cursor += sizeof(struct sctp_datahdr);
-
-	// TODO: this is wrong
-	ulong data_len =
-		chunkh->length - sizeof(struct sctp_chunkhdr) - sizeof(struct sctp_datahdr);
-	bpf_printk("ngap packet of size %u", data_len);
-	if (cursor + data_len > data_end)
-		return 0;
-	// TODO: parse ngap packet
+		// take into account the padding before advancing the cursor
+		chunk_len += (chunk_len % 4) == 0 ? 0 : 4 - chunk_len % 4;
+		// work around to a BPF verifier corner case, see: https://stackoverflow.com/questions/70729664/need-help-in-xdp-program-failing-to-load-with-error-r7-offset-is-outside-of-the
+		if (chunk_len > 512)
+			return 0;
+		cursor += chunk_len;
+	}
 
 	return 0;
 }
@@ -84,6 +85,5 @@ int tc_ingress(struct __sk_buff *skb)
 SEC("tc")
 int tc_egress(struct __sk_buff *skb)
 {
-	bpf_printk("packet out\n");
 	return 0;
 }
