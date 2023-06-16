@@ -12,13 +12,13 @@
 
 // Create a pointer to a struct, points it to the current cursor position
 // and then advances the cursor by the size of the struct.
-#define ADVANCE_CURSOR(TYPE, NAME, CURSOR, END) \
+#define CAST_ADVANCE_CHECKED(TYPE, NAME, CURSOR, END) \
 	if (CURSOR + sizeof(TYPE) > END)        \
 		return 0;                       \
 	TYPE *NAME = CURSOR;                    \
 	CURSOR += sizeof(TYPE)
 
-#define MOUNT(TYPE, NAME, CURSOR, END)   \
+#define CAST_CHECKED(TYPE, NAME, CURSOR, END)   \
 	if (CURSOR + sizeof(TYPE) > END) \
 		return 0;                \
 	TYPE *NAME = CURSOR;
@@ -33,18 +33,18 @@ int tc_ingress(struct __sk_buff *skb)
 	void *cursor = data;
 
 	// FIXME: here we assume it is an ethernet frame inside the socket buffer
-	ADVANCE_CURSOR(struct ethhdr, ethh, cursor, data_end);
+	CAST_ADVANCE_CHECKED(struct ethhdr, ethh, cursor, data_end);
 
 	__u8 ip_proto;
 
 	switch (bpf_ntohs(ethh->h_proto)) {
 	case ETH_P_IP:
-		ADVANCE_CURSOR(struct iphdr, iph, cursor, data_end);
+		CAST_ADVANCE_CHECKED(struct iphdr, iph, cursor, data_end);
 		ip_proto = iph->protocol;
 		break;
 
 	case ETH_P_IPV6:
-		ADVANCE_CURSOR(struct ipv6hdr, ipv6h, cursor, data_end);
+		CAST_ADVANCE_CHECKED(struct ipv6hdr, ipv6h, cursor, data_end);
 		ip_proto = ipv6h->nexthdr;
 		break;
 
@@ -55,14 +55,14 @@ int tc_ingress(struct __sk_buff *skb)
 	if (ip_proto != IPPROTO_SCTP)
 		return 0;
 
-	ADVANCE_CURSOR(struct sctphdr, sctph, cursor, data_end);
+	CAST_ADVANCE_CHECKED(struct sctphdr, sctph, cursor, data_end);
 
 	for (int i = 0; i < MAX_CHUNKS; i++) {
-		MOUNT(struct sctp_chunkhdr, chunkh, cursor, data_end);
+		CAST_CHECKED(struct sctp_chunkhdr, chunkh, cursor, data_end);
 		__u16 chunk_len = bpf_ntohs(chunkh->length);
 
 		if (chunkh->type == SCTP_CID_DATA) {
-			MOUNT(struct sctp_datahdr, datah, cursor + sizeof(struct sctp_chunkhdr),
+			CAST_CHECKED(struct sctp_datahdr, datah, cursor + sizeof(struct sctp_chunkhdr),
 			      data_end);
 			__u16 payload_len = chunk_len - (sizeof(struct sctp_chunkhdr) +
 							 sizeof(struct sctp_datahdr));
